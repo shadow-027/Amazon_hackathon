@@ -98,6 +98,10 @@ export const VideoInputModal: React.FC<VideoInputModalProps> = ({
   const handleUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!streamUrl.trim()) return;
+
+    // For YouTube links: show an immediate informative warning before trying
+    const isYouTube = streamUrl.includes('youtube.com') || streamUrl.includes('youtu.be');
+
     setUrlSubmitting(true);
     setUrlError(null);
     setUrlSuccess(null);
@@ -109,7 +113,24 @@ export const VideoInputModal: React.FC<VideoInputModalProps> = ({
       setStreamTitle('');
       if (onVideoAdded) onVideoAdded();
     } catch (err: any) {
-      setUrlError(err.message || 'Failed to ingest URL');
+      const errMsg: string = err.message || 'Failed to ingest URL';
+      // Detect cloud IP block by YouTube
+      const isBlocked =
+        isYouTube && (
+          errMsg.includes('player response') ||
+          errMsg.includes('cloud server IP') ||
+          errMsg.includes('bot') ||
+          errMsg.includes('restricted')
+        );
+      if (isBlocked) {
+        setUrlError(
+          '⚠️ YouTube has blocked downloads from this cloud server. ' +
+          'This is a YouTube IP restriction on Render\'s data center. ' +
+          'Switch to the "Direct Upload" tab to upload your MP4 file, or paste a direct .mp4 / Google Drive / Dropbox link instead.'
+        );
+      } else {
+        setUrlError(errMsg);
+      }
     } finally {
       setUrlSubmitting(false);
     }
@@ -170,8 +191,9 @@ export const VideoInputModal: React.FC<VideoInputModalProps> = ({
         <div className="p-6 overflow-y-auto flex-1">
           {tab === 'upload' && (
             <div className="space-y-4">
-              <label 
-                htmlFor="file-upload" 
+              {/* Drop zone */}
+              <label
+                htmlFor="file-upload"
                 className="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer transition bg-slate-50/50 hover:bg-emerald-50/30 group"
               >
                 <div className="p-4 bg-emerald-100/70 text-emerald-700 rounded-full mb-3 group-hover:scale-105 transition">
@@ -179,42 +201,60 @@ export const VideoInputModal: React.FC<VideoInputModalProps> = ({
                 </div>
                 <p className="text-sm font-bold text-slate-800">Click to select doorbell security clip</p>
                 <p className="text-xs text-slate-500 mt-1">Supports MP4, MOV, WEBM (Max 150MB)</p>
-                <input 
-                  id="file-upload" 
-                  type="file" 
-                  accept="video/mp4,video/quicktime,video/webm" 
-                  className="hidden" 
-                  onChange={handleFileChange} 
+                <p className="text-xs text-emerald-700 font-semibold mt-2">✓ Works with YouTube downloads &amp; any local video file</p>
+                <input
+                  id="file-upload"
+                  type="file"
+                  accept="video/mp4,video/quicktime,video/webm"
+                  className="hidden"
+                  onChange={handleFileChange}
                 />
               </label>
 
               {selectedFile && (
-                <div className="p-4 bg-slate-100 rounded-xl flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-bold text-slate-800">{selectedFile.name}</p>
-                    <p className="text-xs text-slate-500">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+                <div className="p-4 bg-slate-100 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-bold text-slate-800">{selectedFile.name}</p>
+                      <p className="text-xs text-slate-500">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+                    </div>
+                    <button
+                      onClick={handleUploadSubmit}
+                      disabled={uploadProgress !== null && uploadProgress < 100}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {uploadProgress !== null && uploadProgress < 100 ? (
+                        <><Loader2 size={14} className="animate-spin" /><span>Uploading...</span></>
+                      ) : (
+                        <><Upload size={14} /><span>Upload & Analyze</span></>
+                      )}
+                    </button>
                   </div>
-                  <button
-                    onClick={handleUploadSubmit}
-                    disabled={uploadProgress !== null && uploadProgress < 100}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow-sm transition disabled:opacity-50"
-                  >
-                    {uploadProgress !== null && uploadProgress < 100 ? 'Processing...' : 'Upload & Analyze'}
-                  </button>
+                  {uploadProgress !== null && uploadProgress < 100 && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs font-semibold text-slate-600">
+                        <span>Uploading to backend...</span>
+                        <span>{uploadProgress}%</span>
+                      </div>
+                      <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                        <div
+                          className="bg-emerald-600 h-full transition-all duration-300"
+                          style={{ width: `${uploadProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {uploadProgress !== null && (
+              {uploadProgress !== null && uploadProgress === 100 && !uploadSuccess && (
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs font-semibold text-slate-600">
-                    <span>Validation & Extraction</span>
-                    <span>{uploadProgress}%</span>
+                    <span>Upload Complete</span>
+                    <span>100%</span>
                   </div>
                   <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
-                    <div 
-                      className="bg-emerald-600 h-full transition-all duration-300"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
+                    <div className="bg-emerald-600 h-full w-full" />
                   </div>
                 </div>
               )}
@@ -284,12 +324,12 @@ export const VideoInputModal: React.FC<VideoInputModalProps> = ({
             <form onSubmit={handleUrlSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  YouTube Video Link or Direct MP4 Stream URL
+                  Direct MP4 / Cloud Stream URL
                 </label>
                 <input
                   type="url"
                   required
-                  placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/... or .mp4 stream"
+                  placeholder="https://example.com/video.mp4 or Google Drive / Dropbox link"
                   value={streamUrl}
                   onChange={(e) => setStreamUrl(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
@@ -309,17 +349,39 @@ export const VideoInputModal: React.FC<VideoInputModalProps> = ({
                 />
               </div>
 
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-[11px] text-emerald-950 leading-relaxed flex items-start gap-2">
-                <CheckCircle size={15} className="text-emerald-700 shrink-0 mt-0.5" />
+              {/* YouTube restriction notice */}
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-900 leading-relaxed flex items-start gap-2">
+                <AlertTriangle size={15} className="text-amber-600 shrink-0 mt-0.5" />
                 <span>
-                  <strong>YouTube Ingestion Active:</strong> YouTube doorbell security footage and publicly accessible streams are safely downloaded into your local video repository using yt-dlp for frame extraction and AI telemetry.
+                  <strong>YouTube Links:</strong> YouTube restricts downloads from cloud server IPs (Render). 
+                  For YouTube videos, please <strong>download the MP4 locally</strong> then use the <button type="button" onClick={() => setTab('upload')} className="underline font-bold text-amber-800 hover:text-amber-900">Direct Upload tab</button>.
+                  Direct MP4, Google Drive, and Dropbox links work here.
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-700 leading-relaxed flex items-start gap-2">
+                <CheckCircle size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>What works:</strong> Direct .mp4 / .webm / .mov links, Google Drive share links (<code className="bg-slate-200 px-1 rounded">drive.google.com</code>), Dropbox share links (<code className="bg-slate-200 px-1 rounded">dropbox.com</code>), AWS S3 / CDN direct streams.
                 </span>
               </div>
 
               {urlError && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2">
-                  <AlertTriangle size={16} />
-                  <span>{urlError}</span>
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={16} className="shrink-0 mt-0.5 text-rose-600" />
+                    <span>{urlError}</span>
+                  </div>
+                  {(urlError.includes('YouTube') || urlError.includes('cloud server') || urlError.includes('restricted')) && (
+                    <button
+                      type="button"
+                      onClick={() => { setUrlError(null); setTab('upload'); }}
+                      className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5"
+                    >
+                      <Upload size={13} />
+                      Switch to Direct Upload Tab
+                    </button>
+                  )}
                 </div>
               )}
 
