@@ -84,6 +84,58 @@ router.get('/cloud-connectors', (req, res) => {
   });
 });
 
+// POST /api/videos/upload - Direct binary stream upload for video files
+router.post('/upload', (req, res) => {
+  try {
+    const rawFileName = req.headers['x-filename'] || `upload_${Date.now()}.mp4`;
+    const cleanFileName = decodeURIComponent(rawFileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const destPath = path.join(UPLOADS_DIR, cleanFileName);
+    const writeStream = fs.createWriteStream(destPath);
+
+    req.pipe(writeStream);
+
+    writeStream.on('finish', () => {
+      const stat = fs.existsSync(destPath) ? fs.statSync(destPath) : { size: 0 };
+      const stem = path.parse(cleanFileName).name;
+      const relPath = path.relative(path.join(ROOT_DIR, 'clips'), destPath).replace(/\\/g, '/');
+
+      const newVideo = {
+        id: stem,
+        clip_id: stem,
+        file_name: cleanFileName,
+        stem,
+        bucket: 'uploaded',
+        relative_path: relPath,
+        file_size_bytes: stat.size,
+        duration_sec: 15.0,
+        status: 'not_analyzed',
+        has_media_file: true,
+        thumbnail_url: null,
+        video_url: `/media/clips/${relPath}`,
+        has_analysis: false,
+        analysis: null,
+        ground_truth: null,
+        evidence_frames: [],
+        has_detections: false,
+        is_dataset_benchmark: false,
+        title: cleanFileName.replace(/[_-]/g, ' ')
+      };
+
+      res.json({
+        success: true,
+        message: `Video "${cleanFileName}" uploaded and registered successfully!`,
+        video: newVideo
+      });
+    });
+
+    writeStream.on('error', (err) => {
+      res.status(500).json({ success: false, error: `Upload stream failed: ${err.message}` });
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // POST /api/videos/ingest-url - Ingest YouTube, Cloud storage, or web video stream with SSRF protection
 router.post('/ingest-url', async (req, res) => {
   try {

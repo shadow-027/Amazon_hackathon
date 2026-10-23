@@ -122,6 +122,47 @@ export const api = {
     };
   },
 
+  uploadVideo(file: File, onProgress?: (percent: number) => void): Promise<{ success: boolean; message: string; video: VideoClip }> {
+    const apiBase = getApiBase();
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${apiBase}/videos/upload`);
+      xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+      xhr.setRequestHeader('x-filename', encodeURIComponent(file.name));
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          onProgress(percent);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            resolve({
+              ...data,
+              video: mapVideoMediaUrls(data.video)
+            });
+          } catch {
+            resolve({ success: true, message: 'Upload completed', video: {} as any });
+          }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err.error || `Upload failed with HTTP ${xhr.status}`));
+          } catch {
+            reject(new Error(`Upload failed with HTTP ${xhr.status}`));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(file);
+    });
+  },
+
   async startAnalysis(videoIds: string[]): Promise<AnalysisJob> {
     const apiBase = getApiBase();
     const res = await fetch(`${apiBase}/analysis/jobs`, {

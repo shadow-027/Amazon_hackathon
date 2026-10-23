@@ -77,20 +77,21 @@ export const VideoInputModal: React.FC<VideoInputModalProps> = ({
 
   const handleUploadSubmit = async () => {
     if (!selectedFile) return;
-    setUploadProgress(10);
+    setUploadProgress(5);
     setUploadError(null);
+    setUploadSuccess(null);
 
     try {
-      // Direct file verification & simulated progress stream
-      setUploadProgress(40);
-      await new Promise((r) => setTimeout(r, 600));
-      setUploadProgress(85);
-      await new Promise((r) => setTimeout(r, 400));
+      const res = await api.uploadVideo(selectedFile, (percent) => {
+        setUploadProgress(percent);
+      });
       setUploadProgress(100);
-      setUploadSuccess(`Video "${selectedFile.name}" registered and ready for AI video analysis.`);
+      setUploadSuccess(res.message || `Video "${selectedFile.name}" uploaded successfully!`);
+      setSelectedFile(null);
       if (onVideoAdded) onVideoAdded();
     } catch (err: any) {
       setUploadError(err.message || 'Upload failed');
+      setUploadProgress(null);
     }
   };
 

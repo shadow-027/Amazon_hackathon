@@ -143,78 +143,107 @@ class YtDlpSilentLogger:
 
 def download_ytdlp_video(url, out_dir, max_duration=600):
     """
-    Downloads video using yt-dlp with automatic ffmpeg binary integration
-    and single pre-muxed format fallback to eliminate format merging errors.
+    Downloads video using yt-dlp with automatic ffmpeg binary integration,
+    cloud datacenter anti-bot routing, and single pre-muxed format fallback.
     """
     if not HAVE_YTDLP:
         raise RuntimeError("yt-dlp is not installed in the server Python runtime. Please install dependencies with: pip install -r requirements.txt")
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # Base options - strictly silent on stdout with cloud IP anti-bot arguments
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'noprogress': True,
-        'noplaylist': True,
-        'logger': YtDlpSilentLogger(),
-        'outtmpl': os.path.join(out_dir, '%(id)s.%(ext)s'),
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'web']
-            }
-        },
-        'socket_timeout': 30,
-    }
+    client_strategies = [
+        ['android'],
+        ['mweb'],
+        ['web']
+    ]
 
-    # If static ffmpeg is present, supply it to yt-dlp
-    if FFMPEG_EXE and os.path.exists(FFMPEG_EXE):
-        ydl_opts['ffmpeg_location'] = FFMPEG_EXE
-        # With ffmpeg, we can safely request 720p mp4 video + audio, with pre-muxed fallback
-        ydl_opts['format'] = 'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4]/b[ext=mp4]/18/22/best'
-        ydl_opts['merge_output_format'] = 'mp4'
-    else:
-        # Fallback without ffmpeg: request ONLY single pre-muxed streams (no merging required!)
-        ydl_opts['format'] = 'b[ext=mp4]/best[ext=mp4]/18/22/best'
+    last_error = None
 
-    # Extract info first to check duration
-    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'noplaylist': True}) as ydl:
+    for client_list in client_strategies:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'noprogress': True,
+            'noplaylist': True,
+            'logger': YtDlpSilentLogger(),
+            'outtmpl': os.path.join(out_dir, '%(id)s.%(ext)s'),
+            'extractor_args': {
+                'youtube': {
+                    'player_client': client_list
+                }
+            },
+            'socket_timeout': 35,
+            'retries': 3,
+            'format': 'best[ext=mp4]/best/18',
+        }
+
+        # If static ffmpeg is present, supply it to yt-dlp
+        if FFMPEG_EXE and os.path.exists(FFMPEG_EXE):
+            ydl_opts['ffmpeg_location'] = FFMPEG_EXE
+            ydl_opts['format'] = 'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4]/b[ext=mp4]/18/22/best'
+            ydl_opts['merge_output_format'] = 'mp4'
+
         try:
-            info = ydl.extract_info(url, download=False)
-            duration = info.get('duration', 0)
-            if duration and duration > max_duration:
-                raise ValueError(
-                    f"Video duration ({duration}s) exceeds maximum allowed limit of {max_duration}s ({max_duration // 60} mins)."
-                )
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if not info:
+                    continue
+
+                duration = info.get('duration') or 0
+                stem = info.get('id', 'video_stream')
+                filename = ydl.prepare_filename(info)
+
+                if duration and duration > max_duration:
+                    if os.path.exists(filename):
+                        try:
+                            os.remove(filename)
+                        except Exception:
+                            pass
+                    raise ValueError(
+                        f"Video duration ({duration}s) exceeds maximum allowed limit of {max_duration}s ({max_duration // 60} mins)."
+                    )
+
+                # Locate actual file on disk
+                if not os.path.exists(filename):
+                    base, _ = os.path.splitext(filename)
+                    if os.path.exists(base + '.mp4'):
+                        filename = base + '.mp4'
+                    else:
+                        candidates = [
+                            os.path.join(out_dir, f) for f in os.listdir(out_dir)
+                            if f.startswith(stem) and not f.endswith('.part') and not f.endswith('.ytdl')
+                        ]
+                        if candidates:
+                            filename = candidates[0]
+
+                if not os.path.exists(filename):
+                    continue
+
+                title = info.get('title', stem)
+                thumbnail = info.get('thumbnail')
+
+                return {
+                    "id": stem,
+                    "title": title,
+                    "filename": os.path.basename(filename),
+                    "filepath": os.path.abspath(filename),
+                    "duration": round(float(duration or 15.0), 2),
+                    "thumbnail": thumbnail
+                }
         except ValueError:
             raise
-        except Exception:
-            # If extract_info without download fails, proceed directly to download
-            pass
+        except Exception as err:
+            last_error = err
+            continue
 
-    # Perform actual download
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        stem = info.get('id', 'video_stream')
-        title = info.get('title', stem)
-        thumbnail = info.get('thumbnail')
-        duration = info.get('duration') or 15.0
-
-        # Account for potential remux to .mp4
-        if not os.path.exists(filename):
-            base, _ = os.path.splitext(filename)
-            if os.path.exists(base + '.mp4'):
-                filename = base + '.mp4'
-
-        return {
-            "id": stem,
-            "title": title,
-            "filename": os.path.basename(filename),
-            "filepath": os.path.abspath(filename),
-            "duration": round(float(duration), 2),
-            "thumbnail": thumbnail
-        }
+    # If all client strategies failed, throw a descriptive, actionable error
+    err_msg = str(last_error) if last_error else "Download failed across all stream extractors."
+    if "bot" in err_msg.lower() or "player response" in err_msg.lower() or "429" in err_msg:
+        raise RuntimeError(
+            "YouTube has restricted downloads from this cloud server IP. "
+            "Please use the 'Direct Upload' tab to upload your MP4 file directly, or provide a direct cloud video stream link."
+        )
+    raise RuntimeError(err_msg)
 
 
 def ingest_any_url(url, out_dir, title=None, max_duration=600):
